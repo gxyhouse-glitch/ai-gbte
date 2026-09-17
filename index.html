@@ -1,0 +1,542 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>AI Chat</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;background:#0f172a;color:#e2e8f0;height:100vh;display:flex;justify-content:center}
+.app{width:100%;max-width:850px;display:flex;flex-direction:column;background:#1e293b;height:100vh}
+header{padding:14px;background:#7c3aed;font-weight:bold;text-align:center;font-size:17px}
+#config{padding:10px;background:#0f172a;border-bottom:1px solid #334155;display:flex;flex-direction:column;gap:6px}
+#config label{font-size:11px;color:#94a3b8}
+#config select,#config input{padding:8px;background:#1e293b;border:1px solid #334155;color:#e2e8f0;border-radius:6px;font-size:13px;outline:none;width:100%}
+#msgs{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:10px}
+.msg{max-width:88%;padding:10px 14px;border-radius:14px;line-height:1.6;white-space:pre-wrap;word-wrap:break-word;font-size:15px}
+.u{align-self:flex-start;background:#7c3aed;color:#fff;border-bottom-right-radius:4px}
+.b{align-self:flex-end;background:#334155;border-bottom-left-radius:4px}
+.inp{display:flex;gap:8px;padding:12px;background:#0f172a;border-top:1px solid #334155}
+input[type=text]{flex:1;padding:11px;border-radius:10px;border:1px solid #334155;background:#1e293b;color:#e2e8f0;font-size:15px;outline:none;font-family:inherit}
+input[type=text]:focus{border-color:#7c3aed}
+button{padding:11px 18px;border:none;border-radius:10px;background:#7c3aed;color:#fff;font-weight:bold;cursor:pointer;font-size:14px}
+button:hover{background:#6d28d9}
+button:disabled{background:#475569;cursor:not-allowed}
+#status{font-size:12px;text-align:center;padding:6px;background:#0f172a;color:#94a3b8}
+</style>
+</head>
+
+<body>
+<div class="app">
+
+<header>⚡ AI Chat</header>
+
+<div id="config">
+
+<label>المزوّد (Provider)</label>
+<select id="provider">
+<option value="groq">Groq (مجاني - سريع)</option>
+<option value="openrouter">OpenRouter (نماذج مفتوحة)</option>
+<option value="openai">OpenAI (مدفوع)</option>
+<option value="together">Together AI</option>
+<option value="custom">مخصص (OpenAI-compatible)</option>
+</select>
+
+<label>مفتاح API</label>
+<input type="text" id="apikey" placeholder="الصق مفتاح API هنا...">
+
+<label>النموذج (Model)</label>
+<input type="text" id="model" placeholder="اسم النموذج">
+
+</div>
+
+<div id="status">جاهز - املأ الإعدادات أعلاه</div>
+
+<div id="msgs">
+<div class="msg b">أهلاً! اكتب رسالتك وسأجيبك.</div>
+</div>
+
+<div class="inp">
+<input type="text" id="in" placeholder="اكتب هنا..." autocomplete="off">
+<button id="btn">إرسال</button>
+</div>
+
+</div>
+
+<script>
+
+// ===============================
+// إعدادات المزوّدين
+// ===============================
+
+const PROVIDERS={
+  groq:{
+    url:'https://api.groq.com/openai/v1/chat/completions',
+    defaultModel:'llama-3.3-70b-versatile'
+  },
+
+  openrouter:{
+    url:'https://openrouter.ai/api/v1/chat/completions',
+    defaultModel:'cognitivecomputations/dolphin-mixtral-8x22b'
+  },
+
+  openai:{
+    url:'https://api.openai.com/v1/chat/completions',
+    defaultModel:'gpt-4o-mini'
+  },
+
+  together:{
+    url:'https://api.together.xyz/v1/chat/completions',
+    defaultModel:'meta-llama/Llama-3.3-70B-Instruct-Turbo'
+  },
+
+  custom:{
+    url:'',
+    defaultModel:''
+  }
+};
+
+
+// ===============================
+// العناصر
+// ===============================
+
+const $=id=>document.getElementById(id);
+
+const msgs=$('msgs');
+const inp=$('in');
+const btn=$('btn');
+const st=$('status');
+
+const provider=$('provider');
+const apikey=$('apikey');
+const model=$('model');
+
+const hist=[];
+
+
+// ===============================
+// API KEY الخاص بـ Groq
+// ===============================
+
+const GROQ_API_KEY='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';
+
+apikey.value=GROQ_API_KEY;
+
+
+// ===============================
+// System Prompt
+// ===============================
+
+const SYS='أنت مساعد ذكي مفيد ومباشر. أجب بالعربية بشكل واضح ومفصّل.';
+
+
+// ===============================
+// تحميل الإعدادات
+// ===============================
+
+function loadCfg(){
+
+  const saved=JSON.parse(
+    localStorage.getItem('ai_cfg')||'{}'
+  );
+
+  provider.value='groq';
+
+  apikey.value=GROQ_API_KEY;
+
+  model.value=PROVIDERS.groq.defaultModel;
+
+  updateStatus();
+}
+
+
+// ===============================
+// تغيير المزوّد
+// ===============================
+
+function onProviderChange(){
+
+  const p=PROVIDERS[provider.value];
+
+  if(provider.value!=='custom'){
+    model.value=p.defaultModel;
+  }
+
+  if(provider.value==='groq'){
+    apikey.value=GROQ_API_KEY;
+  }
+
+  if(provider.value==='custom'){
+
+    const customUrl=prompt(
+      'أدخل رابط الـ API المخصص'
+    );
+
+    if(customUrl){
+      PROVIDERS.custom.url=customUrl.trim();
+
+      const customModel=prompt(
+        'أدخل اسم النموذج'
+      );
+
+      if(customModel){
+        model.value=customModel.trim();
+      }
+    }
+  }
+
+  saveCfg();
+  updateStatus();
+}
+
+
+// ===============================
+// حفظ الإعدادات
+// ===============================
+
+function saveCfg(){
+
+  localStorage.setItem(
+    'ai_cfg',
+    JSON.stringify({
+      provider:provider.value,
+      apikey:apikey.value,
+      model:model.value
+    })
+  );
+
+}
+
+
+// ===============================
+// تحديث الحالة
+// ===============================
+
+function updateStatus(){
+
+  const hasKey=
+    apikey.value.trim().length>10;
+
+  const hasModel=
+    model.value.trim().length>0;
+
+  const url=
+    PROVIDERS[provider.value].url;
+
+  const hasUrl=
+    url.length>0;
+
+  if(hasKey&&hasModel&&hasUrl){
+
+    st.textContent=
+      '✅ جاهز - '+
+      provider.options[
+        provider.selectedIndex
+      ].text+
+      ' / '+
+      model.value;
+
+    st.style.color='#4ade80';
+
+  }else{
+
+    st.textContent=
+      '⚠️ أكمل الإعدادات';
+
+    st.style.color='#fbbf24';
+
+  }
+
+}
+
+
+// ===============================
+// إضافة رسالة
+// ===============================
+
+function add(t,c){
+
+  const d=
+    document.createElement('div');
+
+  d.className='msg '+c;
+
+  d.textContent=t;
+
+  msgs.appendChild(d);
+
+  msgs.scrollTop=
+    msgs.scrollHeight;
+
+  return d;
+}
+
+
+// ===============================
+// إرسال الرسالة
+// ===============================
+
+async function send(){
+
+  const text=
+    inp.value.trim();
+
+  if(!text)return;
+
+  const key=
+    apikey.value.trim();
+
+  const mdl=
+    model.value.trim();
+
+  const url=
+    PROVIDERS[
+      provider.value
+    ].url;
+
+  if(!key){
+    alert('مفتاح API غير موجود');
+    return;
+  }
+
+  if(!mdl){
+    alert('اسم النموذج غير موجود');
+    return;
+  }
+
+  if(!url){
+    alert('رابط API غير موجود');
+    return;
+  }
+
+  add(text,'u');
+
+  inp.value='';
+
+  btn.disabled=true;
+
+  const botMsg=
+    add('جاري التفكير...','b');
+
+  hist.push({
+    role:'user',
+    content:text
+  });
+
+
+  try{
+
+    const res=
+      await fetch(url,{
+
+        method:'POST',
+
+        headers:{
+          'Content-Type':
+            'application/json',
+
+          'Authorization':
+            'Bearer '+key
+        },
+
+        body:JSON.stringify({
+
+          model:mdl,
+
+          messages:[
+            {
+              role:'system',
+              content:SYS
+            },
+            ...hist
+          ],
+
+          stream:true,
+
+          temperature:0.8
+
+        })
+
+      });
+
+
+    if(!res.ok){
+
+      const errTxt=
+        await res.text();
+
+      throw new Error(
+        'HTTP '+
+        res.status+
+        ' — '+
+        errTxt.substring(0,300)
+      );
+
+    }
+
+
+    const reader=
+      res.body.getReader();
+
+    const dec=
+      new TextDecoder();
+
+    let full='';
+
+
+    while(true){
+
+      const{
+        done,
+        value
+      }=
+        await reader.read();
+
+      if(done)break;
+
+
+      const chunk=
+        dec.decode(
+          value,
+          {stream:true}
+        );
+
+
+      for(
+        const line of
+        chunk.split('\n')
+      ){
+
+        const trimmed=
+          line.trim();
+
+        if(
+          !trimmed||
+          !trimmed.startsWith('data:')
+        )continue;
+
+
+        const data=
+          trimmed
+          .slice(5)
+          .trim();
+
+
+        if(data==='[DONE]')
+          continue;
+
+
+        try{
+
+          const json=
+            JSON.parse(data);
+
+          const delta=
+            json
+            .choices?.[0]
+            ?.delta
+            ?.content;
+
+
+          if(delta){
+
+            full+=delta;
+
+            botMsg.textContent=
+              full;
+
+            msgs.scrollTop=
+              msgs.scrollHeight;
+
+          }
+
+        }catch(e){}
+
+      }
+
+    }
+
+
+    if(!full){
+
+      botMsg.textContent=
+        '(لم يتم استلام رد)';
+
+    }else{
+
+      hist.push({
+        role:'assistant',
+        content:full
+      });
+
+    }
+
+
+  }catch(err){
+
+    botMsg.textContent=
+      '❌ خطأ: '+err.message;
+
+    botMsg.style.color=
+      '#f87171';
+
+  }finally{
+
+    btn.disabled=false;
+
+    inp.focus();
+
+  }
+
+}
+
+
+// ===============================
+// الأحداث
+// ===============================
+
+btn.onclick=send;
+
+inp.addEventListener(
+  'keydown',
+  e=>{
+    if(e.key==='Enter')
+      send();
+  }
+);
+
+provider.addEventListener(
+  'change',
+  onProviderChange
+);
+
+apikey.addEventListener(
+  'input',
+  ()=>{
+    saveCfg();
+    updateStatus();
+  }
+);
+
+model.addEventListener(
+  'input',
+  ()=>{
+    saveCfg();
+    updateStatus();
+  }
+);
+
+
+// ===============================
+// تشغيل
+// ===============================
+
+loadCfg();
+
+inp.focus();
+
+</script>
+
+</body>
+  </html>
